@@ -1,6 +1,7 @@
 import { GraphQLObjectType, GraphQLSchema, GraphQLString, GraphQLFloat, GraphQLList, graphql } from "graphql";
 import { findOrderById } from "../../lib/data";
-import { requireUserResponse } from "../../lib/session";
+import { currentUser, requireUserResponse } from "../../lib/session";
+import { withBold } from "../../lib/bold";
 
 const OrderItemType = new GraphQLObjectType({
   name: "OrderItem",
@@ -51,21 +52,26 @@ const schema = new GraphQLSchema({
   query: QueryType
 });
 
-export async function POST(request: Request) {
-  const auth = await requireUserResponse();
-  if (auth.response) return auth.response;
+export const POST = withBold(
+  async (request: Request) => {
+    const auth = await requireUserResponse();
+    if (auth.response) return auth.response;
 
-  const body = await request.json().catch(() => null);
-  if (!body || typeof body.query !== "string") {
-    return Response.json({ errors: [{ message: "Expected JSON body with a GraphQL query string" }] }, { status: 400 });
-  }
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.query !== "string") {
+      return Response.json({ errors: [{ message: "Expected JSON body with a GraphQL query string" }] }, { status: 400 });
+    }
 
-  const result = await graphql({
-    schema,
-    source: body.query,
-    variableValues: body.variables,
-    contextValue: { user: auth.user }
-  });
+    const result = await graphql({
+      schema,
+      source: body.query,
+      variableValues: body.variables,
+      contextValue: { user: auth.user }
+    });
 
-  return Response.json(result);
-}
+    return Response.json(result);
+  },
+  // BoLD parses the GraphQL op + id from a CLONE of the request body (the handler's own
+  // request.json() is unaffected) and reads the owner from data.<field>.ownerId in the response.
+  { resolveCallerId: async () => (await currentUser())?.id ?? null }
+);
