@@ -2,6 +2,10 @@
 
 Standalone Next.js application for testing BoLD against an authorization flaw where the object ID is supplied inside a GraphQL request body instead of the URL path.
 
+## Live Deployment
+
+Production: https://bold-app-3-graphql.vercel.app
+
 ## Contract
 
 - Route: `app/api/graphql/route.ts`
