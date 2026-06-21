@@ -236,6 +236,10 @@ async function observe(
   request: Request,
   response: Response,
   cfg: ResolvedConfig,
+  // The GraphQL request body, captured BEFORE the handler ran (the handler consumes the body, so a
+  // clone taken afterwards is empty — only the up-front capture in withBold has the query). null for
+  // non-GraphQL requests or when the body could not be read.
+  gqlBody: unknown,
 ): Promise<void> {
   try {
     const url = new URL(request.url);
@@ -248,13 +252,8 @@ async function observe(
     let method: string;
 
     if (request.method.toUpperCase() === "POST" && GQL_PATH.test(url.pathname)) {
-      // ── GraphQL path: the id is in the request body, the owner under data.<field>. ──
-      let op: GraphqlOp | null = null;
-      try {
-        op = parseGraphqlOp(await request.clone().json());
-      } catch {
-        op = null;
-      }
+      // ── GraphQL path: the id is in the request body (captured up-front), owner under data.<field>.
+      const op: GraphqlOp | null = parseGraphqlOp(gqlBody);
       if (!op) return; // can't identify exactly one object op -> ship nothing, never guess
       endpoint = `${url.pathname}#${op.field}`; // endpoint template names the GraphQL field
       objectId = op.objectId;
@@ -314,14 +313,29 @@ async function observe(
  */
 export function withBold<C>(handler: RouteHandler<C>, config?: BoldConfig): RouteHandler<C> {
   return async (request: Request, context: C): Promise<Response> => {
-    const response = await handler(request, context);
     const cfg = resolveConfig(config);
+
+    // For a GraphQL POST, the id lives in the request body — and the handler will CONSUME that body
+    // when it reads it. So we must capture it from a CLONE *before* the handler runs; a clone taken
+    // afterwards is empty. We read it fail-safe: any error leaves gqlBody null and the request is
+    // simply not judged (never breaks the handler, which gets the original body untouched).
+    let gqlBody: unknown = null;
+    if (cfg && request.method.toUpperCase() === "POST") {
+      try {
+        const url = new URL(request.url);
+        if (GQL_PATH.test(url.pathname)) gqlBody = await request.clone().json();
+      } catch {
+        gqlBody = null;
+      }
+    }
+
+    const response = await handler(request, context);
     if (cfg) {
       // AWAIT the observe so the metadata POST actually transmits before the serverless function
       // freezes at return (an un-awaited POST is silently dropped on Vercel/Lambda — proven on a
       // real deploy). observe() is fully fail-safe internally (try/catch + .catch), so awaiting it
       // can never throw, never alter the response, and only briefly delays returning it.
-      await observe(request, response, cfg);
+      await observe(request, response, cfg, gqlBody);
     }
     return response;
   };
